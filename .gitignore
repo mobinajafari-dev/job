@@ -1,0 +1,5 @@
+.vscode/settings.json
+job-bot.zip
+.env
+config.php
+*.secret

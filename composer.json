@@ -1,0 +1,20 @@
+{
+  "name": "telegram-job-bot",
+  "description": "Telegram Job Bot",
+  "type": "project",
+  "require": {
+    "php": ">=7.4",
+    "ext-pdo": "*",
+    "ext-curl": "*",
+    "ext-json": "*"
+  },
+  "autoload": {
+    "psr-4": {
+      "Controllers\\": "src/Controllers/",
+      "Models\\": "src/Models/",
+      "Services\\": "src/Services/",
+      "Core\\": "src/Core/",
+      "Helpers\\": "src/Helpers/"
+    }
+  }
+}

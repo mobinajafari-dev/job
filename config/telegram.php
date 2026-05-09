@@ -16,7 +16,6 @@ return [
             'resize_keyboard' => true,
             'one_time_keyboard' => false
         ],
-
         'cancel' => [
             'keyboard' => [
                 [['text' => '❌ انصراف']]
@@ -26,11 +25,10 @@ return [
         ]
     ],
 
-    // تنظیمات پیام‌ها
+    // تنظیمات پیام‌ها (بدون استفاده از ثابت)
     'messages' => [
         'welcome' => "به ربات آگهی‌های کاری خوش آمدید! 👋\n\n",
         'need_phone' => "لطفاً شماره تلفن خود را ارسال کنید:",
-        'job_price' => "هزینه هر آگهی: " . number_format(JOB_PRICE) . " تومان",
         'insufficient_balance' => "موجودی کیف پول شما کافی نیست. لطفاً کیف پول خود را شارژ کنید."
     ]
 ];

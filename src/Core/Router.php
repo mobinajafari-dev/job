@@ -5,6 +5,7 @@ use Controllers\BotController;
 use Controllers\AdminController;
 use Controllers\PaymentController;
 use Controllers\TicketController;
+use Controllers\ChannelController;
 use Services\TelegramService;
 use Helpers\Logger;
 
@@ -13,14 +14,16 @@ class Router {
     private $adminController;
     private $paymentController;
     private $ticketController;
+    private $channelController;
     private $telegram;
 
     public function __construct() {
+        $this->telegram = new TelegramService(BOT_TOKEN);
         $this->botController = new BotController();
         $this->adminController = new AdminController();
         $this->paymentController = new PaymentController();
         $this->ticketController = new TicketController();
-        $this->telegram = new TelegramService(BOT_TOKEN);
+        $this->channelController = new ChannelController();
     }
 
     /**
@@ -28,207 +31,210 @@ class Router {
      */
     public function process($update) {
         try {
-            // ثبت لاگ درخواست
-            Logger::info("Received update: " . json_encode($update));
+            $this->logRequest($update);
 
-            // پردازش پیام‌ها
             if (isset($update['message'])) {
                 $this->processMessage($update['message']);
-            }
-
-            // پردازش callback ها
-            elseif (isset($update['callback_query'])) {
+            } elseif (isset($update['callback_query'])) {
                 $this->processCallback($update['callback_query']);
-            }
-
-            // پردازش inline query ها
-            elseif (isset($update['inline_query'])) {
+            } elseif (isset($update['inline_query'])) {
                 $this->processInlineQuery($update['inline_query']);
             }
 
         } catch (\Exception $e) {
-            Logger::error("Router error: " . $e->getMessage());
+            Logger::error("Router error: " . $e->getMessage() . " in " . $e->getFile() . ":" . $e->getLine());
             $this->handleError($update, $e);
         }
     }
 
+    /**
+     * پردازش پیام‌های معمولی
+     */
     private function processMessage($message) {
         $chat_id = $message['chat']['id'];
         $text = $message['text'] ?? '';
 
-        // مسیریابی بر اساس متن پیام
+        Logger::info("Message from {$chat_id}: {$text}");
+
+        // 1. اگر کاربر شماره فرستاده
+        if (isset($message['contact'])) {
+            $this->botController->handleMessage($message);
+            return;
+        }
+
+        // 2. بررسی دستورات ادمین
         if (strpos($text, '/admin') === 0) {
             $this->adminController->handle(['message' => $message]);
+            return;
         }
-        elseif (strpos($text, '/pay') === 0) {
+
+        // 3. بررسی دستور پرداخت
+        if (strpos($text, '/pay') === 0) {
             $this->paymentController->handle(['message' => $message]);
+            return;
         }
-        elseif ($text == '/start') {
+
+        // 4. دستور start (با کد معرف)
+        if ($text == '/start' || strpos($text, '/start ') === 0) {
             $this->handleStartCommand($message);
+            return;
         }
-        elseif (isset($message['contact'])) {
-            $this->botController->handleContact($message);
-        }
-        else {
-            // مسیریابی به کنترلر اصلی
-            $this->botController->handle(['message' => $message]);
-        }
+
+        // 5. بقیه پیام‌ها - ارسال به کنترلر اصلی
+        $this->botController->handleMessage($message);
     }
 
+    /**
+     * پردازش دکمه‌های شیشه‌ای (Callback)
+     */
     private function processCallback($callback) {
         $data = $callback['data'];
         $chat_id = $callback['message']['chat']['id'];
+        $callback_id = $callback['id'];
 
-        // مسیریابی دکمه‌های اینلاین
-        if (strpos($data, 'approve_job_') === 0) {
-            $job_id = str_replace('approve_job_', '', $data);
-            $this->adminController->approveJob($chat_id, $job_id);
+        $this->telegram->answerCallbackQuery($callback_id);
+        Logger::info("Callback from {$chat_id}: {$data}");
+
+        // کپی لینک دعوت
+        if (strpos($data, 'copy_link_') === 0) {
+            $referral_code = str_replace('copy_link_', '', $data);
+            $link = "https://t.me/" . BOT_USERNAME . "?start=" . $referral_code;
+            $this->telegram->answerCallbackQuery($callback_id, "✅ لینک کپی شد!", true);
+            $this->telegram->sendMessage($chat_id, "🔗 لینک دعوت شما:\n<code>{$link}</code>");
+            return;
         }
 
-        elseif (strpos($data, 'reject_job_') === 0) {
-            $job_id = str_replace('reject_job_', '', $data);
-            $this->adminController->rejectJob($chat_id, $job_id);
+        // بازگشت به منوی اصلی
+        if ($data == 'back_to_menu') {
+            $this->botController->backToMenu($chat_id);
+            return;
         }
 
-        elseif (strpos($data, 'connect_') === 0) {
-            $parts = explode('_', $data);
-            $job_id = $parts[1] ?? 0;
-            $contact_id = $parts[2] ?? '';
-            $this->handleConnection($chat_id, $job_id, $contact_id);
+        // بررسی عضویت در کانال
+        if ($data == 'check_membership') {
+            $channelController = new \Controllers\ChannelController();
+            $channelController->handleCallback($callback);
+            return;
         }
 
-        elseif (strpos($data, 'reply_ticket_') === 0) {
-            $ticket_id = str_replace('reply_ticket_', '', $data);
-            $this->askForTicketReply($chat_id, $ticket_id);
+        // دکمه‌های مربوط به آگهی (تایید/رد توسط ادمین)
+        if (strpos($data, 'approve_job_') === 0 || strpos($data, 'reject_job_') === 0) {
+            $this->adminController->handle(['callback_query' => $callback]);
+            return;
         }
 
-        elseif (strpos($data, 'close_ticket_') === 0) {
-            $ticket_id = str_replace('close_ticket_', '', $data);
-            $this->ticketController->closeTicket($chat_id, $ticket_id);
+        // دکمه‌های مربوط به تیکت
+        if (strpos($data, 'reply_ticket_') === 0 || strpos($data, 'close_ticket_') === 0 || $data == 'admin_tickets_list') {
+            $this->ticketController->handle(['callback_query' => $callback]);
+            return;
         }
 
-        elseif (strpos($data, 'admin_') === 0) {
-            $this->handleAdminCallbacks($chat_id, $data);
+        // دکمه‌های مربوط به کانال (اتصال با کارفرما، بستن آگهی)
+        if (strpos($data, 'connect_') === 0 || strpos($data, 'close_job_') === 0) {
+            $this->channelController->handleCallback($callback);
+            return;
         }
 
-        // پاسخ به callback
-        $this->telegram->answerCallbackQuery($callback['id']);
+        // دکمه‌های منوی ادمین
+        if (strpos($data, 'admin_') === 0) {
+            $this->adminController->handle(['callback_query' => $callback]);
+            return;
+        }
+
+        // دکمه‌های مربوط به پرداخت
+        if ($data == 'cancel_payment') {
+            $this->paymentController->handle(['callback_query' => $callback]);
+            return;
+        }
+
+        // دکمه‌های مربوط به ارسال همگانی
+        if (strpos($data, 'broadcast_') === 0) {
+            $this->adminController->handle(['callback_query' => $callback]);
+            return;
+        }
+
+        // سایر callbackها - ارسال به کنترلر اصلی
+        $this->botController->handleCallback($callback);
     }
 
+    /**
+     * پردازش جستجوی درون خطی (Inline Query)
+     */
     private function processInlineQuery($inline_query) {
         $query = $inline_query['query'];
         $results = [];
 
-        // جستجوی آگهی‌های فعال
-        if (strlen($query) > 2) {
-            $sql = "SELECT id, content FROM jobs 
-                    WHERE status = 'active' AND content LIKE :query 
-                    LIMIT 10";
-            $jobs = Database::queryAll($sql, ['query' => "%{$query}%"]);
-
-            foreach ($jobs as $job) {
-                $results[] = [
-                    'type' => 'article',
-                    'id' => $job['id'],
-                    'title' => 'آگهی استخدام',
-                    'description' => mb_substr($job['content'], 0, 50),
-                    'input_message_content' => [
-                        'message_text' => $job['content']
-                    ]
-                ];
-            }
+        if (mb_strlen($query) > 2) {
+            $results = $this->botController->searchJobs($query);
         }
 
         $this->telegram->answerInlineQuery($inline_query['id'], $results);
     }
 
+    /**
+     * هندل کردن دستور /start با کد معرف
+     */
     private function handleStartCommand($message) {
         $chat_id = $message['chat']['id'];
+        $username = $message['chat']['username'] ?? '';
         $text = $message['text'] ?? '';
 
-        // بررسی وجود کد معرف
-        $parts = explode(' ', $text);
-        $referral_code = $parts[1] ?? null;
-
-        if ($referral_code && strpos($referral_code, 'start') === false) {
-            $_SESSION['referral_code'] = $referral_code;
+        $referral_code = null;
+        if (strpos($text, ' ') !== false) {
+            $parts = explode(' ', $text, 2);
+            $referral_code = trim($parts[1]);
+            if ($referral_code == 'start') {
+                $referral_code = null;
+            }
         }
 
-        $this->botController->handleStart($chat_id);
+        Logger::info("Start command from {$chat_id}, referral: " . ($referral_code ?? 'none'));
+        $this->botController->handleStart($chat_id, $username, $referral_code);
     }
 
-    private function handleConnection($chat_id, $job_id, $contact_id) {
-        // بررسی معتبر بودن آگهی
-        $sql = "SELECT status FROM jobs WHERE id = :job_id";
-        $job = Database::query($sql, ['job_id' => $job_id]);
-
-        if (!$job || $job['status'] != 'active') {
-            $this->telegram->sendMessage($chat_id, "❌ این آگهی دیگر فعال نیست.");
-            return;
-        }
-
-        // ایجاد لینک ارتباطی
-        $contact_link = "https://t.me/{$contact_id}";
-
-        $keyboard = [
-            'inline_keyboard' => [
-                [
-                    ['text' => '📱 ارتباط با کارفرما', 'url' => $contact_link]
-                ],
-                [
-                    ['text' => 'ℹ️ گزارش مشکل', 'callback_data' => "report_job_{$job_id}"]
-                ]
-            ]
-        ];
-
-        $message = "🔗 لینک ارتباطی کارفرما:\n\n";
-        $message .= "برای ارتباط مستقیم روی دکمه زیر کلیک کنید:";
-
-        $this->telegram->sendMessage($chat_id, $message, $keyboard);
-    }
-
-    private function handleAdminCallbacks($chat_id, $data) {
-        switch ($data) {
-            case 'admin_stats':
-                $this->adminController->showStats($chat_id);
-                break;
-            case 'admin_pending':
-                $this->adminController->showPendingJobs($chat_id);
-                break;
-            case 'admin_users':
-                $this->adminController->showUsers($chat_id);
-                break;
-            case 'admin_transactions':
-                $this->adminController->showTransactions($chat_id);
-                break;
-            case 'admin_financial':
-                $this->adminController->showFinancialReport($chat_id);
-                break;
-            case 'admin_add_discount':
-                $this->adminController->askForDiscountCode($chat_id);
-                break;
+    /**
+     * ثبت لاگ درخواست
+     */
+    private function logRequest($update) {
+        if (isset($update['message'])) {
+            $chat_id = $update['message']['chat']['id'] ?? 'unknown';
+            $text = $update['message']['text'] ?? '[no text]';
+            Logger::info("Request: {$chat_id} -> {$text}");
+        } elseif (isset($update['callback_query'])) {
+            $chat_id = $update['callback_query']['message']['chat']['id'] ?? 'unknown';
+            $data = $update['callback_query']['data'] ?? '[no data]';
+            Logger::info("Callback: {$chat_id} -> {$data}");
         }
     }
 
-    private function askForTicketReply($chat_id, $ticket_id) {
-        // ذخیره وضعیت در session یا cache
-        $_SESSION['replying_ticket'] = $ticket_id;
-
-        $this->telegram->sendMessage($chat_id,
-            "✏️ لطفاً پاسخ تیکت را وارد کنید:\n\n" .
-            "برای لغو، /cancel را بفرستید."
-        );
-    }
-
+    /**
+     * مدیریت خطاها
+     */
     private function handleError($update, $e) {
-        // ارسال خطا به ادمین
-        foreach (ADMIN_IDS as $admin_id) {
-            $this->telegram->sendMessage($admin_id,
-                "⚠️ خطا در ربات:\n\n" .
-                "Error: " . $e->getMessage() . "\n" .
-                "File: " . $e->getFile() . "\n" .
-                "Line: " . $e->getLine()
+        $errorMessage = "⚠️ خطا در ربات:\n\n"
+            . "Error: " . $e->getMessage() . "\n"
+            . "Line: " . $e->getLine() . "\n"
+            . "File: " . $e->getFile();
+
+        if (defined('ADMIN_IDS') && !empty(ADMIN_IDS)) {
+            foreach (ADMIN_IDS as $admin_id) {
+                if ($admin_id) {
+                    try {
+                        $this->telegram->sendMessage($admin_id, $errorMessage);
+                    } catch (\Exception $e2) {
+                        Logger::error("Failed to send error to admin: " . $e2->getMessage());
+                    }
+                }
+            }
+        }
+
+        if (isset($update['message']['chat']['id'])) {
+            $this->telegram->sendMessage(
+                $update['message']['chat']['id'],
+                "❌ خطایی رخ داده است. لطفاً دقایقی دیگر تلاش کنید یا با پشتیبانی تماس بگیرید."
             );
         }
+
+        Logger::error("Router error: " . $e->getMessage() . " in " . $e->getFile() . ":" . $e->getLine());
     }
 }

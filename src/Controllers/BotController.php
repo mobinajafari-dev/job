@@ -1,22 +1,37 @@
 <?php
 namespace Controllers;
 
-use Models\User;
-use Models\Wallet;
+use Services\UserService;
+use Services\WalletService;
+use Services\JobService;
+use Services\DiscountService;
+use Services\TicketService;
+use Services\ReferralService;
 use Services\TelegramService;
+use Middleware\ChannelMembership;
+use Helpers\Logger;
 
 class BotController {
     private $telegram;
-    private $userModel;
-    private $walletModel;
-    private $userStates = []; // برای وضعیت‌های کاربر
-    
+    private $userService;
+    private $walletService;
+    private $jobService;
+    private $discountService;
+    private $ticketService;
+    private $referralService;
+    private $channelMiddleware;
+
     public function __construct() {
         $this->telegram = new TelegramService(BOT_TOKEN);
-        $this->userModel = new User();
-        $this->walletModel = new Wallet();
+        $this->userService = new UserService($this->telegram);
+        $this->walletService = new WalletService($this->telegram);
+        $this->jobService = new JobService($this->telegram, $this->walletService);
+        $this->discountService = new DiscountService($this->telegram, $this->walletService);
+        $this->ticketService = new TicketService($this->telegram);
+        $this->referralService = new ReferralService($this->telegram);
+        $this->channelMiddleware = new ChannelMembership($this->telegram, CHANNEL_ID);
     }
-    
+
     public function handle($update) {
         if (isset($update['message'])) {
             $this->handleMessage($update['message']);
@@ -24,141 +39,120 @@ class BotController {
             $this->handleCallback($update['callback_query']);
         }
     }
-    
-    private function handleMessage($message) {
+
+    public function handleMessage($message) {
         $chat_id = $message['chat']['id'];
         $text = $message['text'] ?? '';
         $username = $message['chat']['username'] ?? '';
-        
-        // اگر کاربر شماره فرستاده
-        if (isset($message['contact'])) {
-            $this->handlePhoneNumber($chat_id, $username, $message['contact']);
+
+        if (!$this->channelMiddleware->check($chat_id)) {
             return;
         }
-        
-        // اگر کاربر قبلاً ثبت‌نام نکرده
-        if(!$this->userModel->exists($chat_id) && $text != '/start') {
+
+        if (isset($message['contact'])) {
+            $this->userService->handlePhoneNumber($chat_id, $username, $message['contact']);
+            return;
+        }
+
+        if (!$this->userService->isUserExists($chat_id) && $text != '/start') {
             $this->telegram->sendMessage($chat_id, "❌ لطفاً ابتدا /start را بزنید و شماره خود را ارسال کنید.");
             return;
         }
-        
-        // پردازش دستورات
+
         switch ($text) {
             case '/start':
-                $this->handleStart($chat_id, $username);
+                $this->handleStartCommand($chat_id, $username, $message);
                 break;
             case '📝 ارسال آگهی':
-                $this->askForJobDetails($chat_id);
+                $this->jobService->startCreation($chat_id);
                 break;
             case '💰 کیف پول من':
-                $this->showWallet($chat_id);
+                $this->walletService->showWallet($chat_id);
                 break;
             case '🎁 کد تخفیف':
-                $this->askForDiscountCode($chat_id);
+                $this->discountService->startDiscount($chat_id);
                 break;
             case '👥 دعوت از دوستان':
-                $this->showReferralLink($chat_id);
+                $this->referralService->showReferralInfo($chat_id);
                 break;
             case '📞 پشتیبانی':
-                $this->createTicket($chat_id);
+                $this->ticketService->startTicket($chat_id);
                 break;
             case 'ℹ️ راهنما':
                 $this->showHelp($chat_id);
                 break;
             case '❌ انصراف':
-                $this->cancelAction($chat_id);
+                $this->userService->clearUserState($chat_id);
+                $this->telegram->sendMessage($chat_id, "❌ عملیات لغو شد.", $this->getMainKeyboard());
                 break;
             default:
                 $this->handleUserState($chat_id, $text);
         }
     }
-    
-    /**
-     * هندل کردن استارت - گرفتن شماره تلفن
-     */
-    private function handleStart($chat_id, $username) {
-        // بررسی وجود کاربر
-        if($this->userModel->exists($chat_id)) {
-            // کاربر قبلاً ثبت‌نام کرده
-            $balance = $this->userModel->getBalance($chat_id);
-            $message = "✨ به ربات آگهی‌های کاری خوش آمدید!\n\n";
-            $message .= "💰 موجودی کیف پول شما: " . number_format($balance) . " تومان\n\n";
-            $message .= "از دکمه‌های زیر استفاده کنید:";
-            
-            $this->telegram->sendMessage($chat_id, $message, $this->getMainKeyboard());
-        } else {
-            // کاربر جدید - درخواست شماره
-            $message = "📱 <b>به ربات آگهی‌های کاری خوش آمدید!</b>\n\n";
-            $message .= "برای استفاده از ربات، لطفاً شماره تلفن خود را ارسال کنید.\n\n";
-            $message .= "🎁 <b>هدیه ویژه:</b> پس از ثبت‌نام، 10,000 تومان به کیف پول شما تعلق می‌گیرد!";
-            
-            $this->telegram->requestContact($chat_id, $message);
+
+    private function handleStartCommand($chat_id, $username, $message) {
+        $text = $message['text'] ?? '';
+        $referralCode = $this->referralService->extractReferralCodeFromStart($text);
+        $this->userService->handleStart($chat_id, $username, $referralCode);
+    }
+
+    public function handleCallback($callback) {
+        $chat_id = $callback['message']['chat']['id'];
+        $data = $callback['data'];
+        $callback_id = $callback['id'];
+
+        $this->telegram->answerCallbackQuery($callback_id, 'در حال پردازش...');
+
+        if (strpos($data, 'copy_link_') === 0) {
+            $referral_code = str_replace('copy_link_', '', $data);
+            $link = "https://t.me/" . BOT_USERNAME . "?start=" . $referral_code;
+            $this->telegram->answerCallbackQuery($callback_id, "✅ لینک کپی شد!", true);
+            $this->telegram->sendMessage($chat_id, "🔗 لینک دعوت شما:\n<code>{$link}</code>");
+            return;
+        }
+
+        if ($data == 'back_to_menu') {
+            $this->telegram->sendMessage($chat_id, "🔙 به منوی اصلی بازگشتید.", $this->getMainKeyboard());
+            return;
         }
     }
-    
-    /**
-     * پردازش شماره تلفن دریافتی
-     */
- /**
- * پردازش شماره تلفن دریافتی
- */
-private function handlePhoneNumber($chat_id, $username, $contact) {
-    $phone = $contact['phone_number'];
-    
-    // بررسی اینکه کاربر قبلاً ثبت نشده باشه
-    if($this->userModel->exists($chat_id)) {
-        $this->telegram->sendMessage($chat_id, "✅ شما قبلاً ثبت‌نام کرده‌اید!", $this->getMainKeyboard());
-        return;
-    }
-    
-    // ثبت کاربر در دیتابیس (با 10000 تومان هدیه - داخل متد create انجام میشه)
-    $result = $this->userModel->create($chat_id, $username, $phone);
-    
-    if($result) {
-        // فقط پیام خوش آمدید نمایش بده (بقیه کارها توی متد create انجام شده)
-        $message = "✅ <b>شماره شما با موفقیت ثبت شد!</b>\n\n";
-        $message .= "🎁 10,000 تومان هدیه به کیف پول شما اضافه شد.\n\n";
-        $message .= "✨ به جمع کاربران ما خوش آمدید!\n\n";
-        $message .= "از دکمه‌های زیر استفاده کنید:";
-        
-        $this->telegram->sendMessage($chat_id, $message, $this->getMainKeyboard());
-    } else {
-        $this->telegram->sendMessage($chat_id, "❌ خطا در ثبت اطلاعات. لطفاً دوباره تلاش کنید.");
-        $this->telegram->requestContact($chat_id, "لطفاً شماره خود را مجدداً ارسال کنید:");
-    }
-}
-    
-    /**
-     * نمایش کیف پول
-     */
-    private function showWallet($chat_id) {
-        $balance = $this->userModel->getBalance($chat_id);
-        $user = $this->userModel->findByTelegramId($chat_id);
-        
-        $message = "💰 <b>کیف پول شما</b>\n\n";
-        $message .= "💵 موجودی: " . number_format($balance) . " تومان\n\n";
-        $message .= "📊 برای شارژ کیف پول از دستور /pay [مبلغ] استفاده کنید.\n";
-        $message .= "مثال: /pay 50000";
-        
-        // دریافت آخرین تراکنش‌ها
-        if($user) {
-            $transactions = $this->walletModel->getTransactions($user['id'], 5);
-            if($transactions) {
-                $message .= "\n📋 <b>آخرین تراکنش‌ها:</b>\n";
-                foreach($transactions as $t) {
-                    $sign = $t['amount'] > 0 ? '+' : '';
-                    $message .= "• " . date('d/m H:i', strtotime($t['created_at'])) . " - {$sign}" . number_format($t['amount']) . " تومان\n";
-                }
-            }
+
+    private function handleUserState($chat_id, $text) {
+        $state = $this->userService->getUserState($chat_id);
+
+        switch ($state) {
+            case 'waiting_job':
+                $this->jobService->saveJobText($chat_id, $text);
+                break;
+            case 'waiting_contact':
+                $this->jobService->saveContactAndSubmit($chat_id, $text);
+                break;
+            case 'waiting_discount':
+                $this->discountService->applyDiscount($chat_id, $text);
+                $this->userService->clearUserState($chat_id);
+                break;
+            case 'waiting_ticket':
+                $this->ticketService->createTicket($chat_id, $text);
+                $this->userService->clearUserState($chat_id);
+                $this->telegram->sendMessage($chat_id, "به منوی اصلی برگشتید.", $this->getMainKeyboard());
+                break;
+            default:
+                $this->telegram->sendMessage($chat_id, "❌ دستور نامعتبر. لطفاً از منوی اصلی استفاده کنید.", $this->getMainKeyboard());
         }
-        
-        $this->telegram->sendMessage($chat_id, $message);
     }
-    
-    /**
-     * دریافت کیبورد اصلی
-     */
-    private function getMainKeyboard() {
+
+    private function showHelp($chat_id) {
+        $help = "📖 <b>راهنمای ربات</b>\n\n";
+        $help .= "1️⃣ <b>ارسال آگهی:</b>\n   هزینه: " . number_format(JOB_PRICE) . " تومان\n\n";
+        $help .= "2️⃣ <b>کیف پول:</b>\n   دستور /pay [مبلغ]\n\n";
+        $help .= "3️⃣ <b>کد تخفیف:</b>\n   از ادمین دریافت کنید\n\n";
+        $help .= "4️⃣ <b>دعوت از دوستان:</b>\n   هر دعوت " . number_format(REFERRAL_BONUS) . " تومان پاداش\n\n";
+        $help .= "5️⃣ <b>پشتیبانی:</b>\n   از دکمه پشتیبانی استفاده کنید";
+
+        $this->telegram->sendMessage($chat_id, $help);
+    }
+
+    public function getMainKeyboard() {
         return [
             'keyboard' => [
                 [['text' => '📝 ارسال آگهی'], ['text' => '💰 کیف پول من']],
@@ -168,104 +162,17 @@ private function handlePhoneNumber($chat_id, $username, $contact) {
             'resize_keyboard' => true
         ];
     }
-    
-    // متدهای دیگه (خلاصه برای اختصار)
-    private function askForJobDetails($chat_id) {
-        $_SESSION['user_state'][$chat_id] = 'waiting_job';
-        $this->telegram->sendMessage($chat_id, "✏️ لطفاً متن آگهی خود را ارسال کنید:");
+
+    public function backToMenu($chat_id) {
+        $this->telegram->sendMessage($chat_id, "🔙 به منوی اصلی بازگشتید.", $this->getMainKeyboard());
     }
-    
-    private function askForDiscountCode($chat_id) {
-        $_SESSION['user_state'][$chat_id] = 'waiting_discount';
-        $this->telegram->sendMessage($chat_id, "🎁 کد تخفیف خود را وارد کنید:");
+
+    public function handlePayment($chat_id, $amount) {
+        $paymentService = new \Services\PaymentService($this->telegram);
+        $paymentService->handlePaymentCommand($chat_id, $amount);
     }
-    
-    private function showReferralLink($chat_id) {
-        $bot_username = getenv('BOT_USERNAME') ?: 'mobina_bot';
-        $link = "https://t.me/{$bot_username}?start=ref_{$chat_id}";
-        $message = "👥 <b>سیستم دعوت از دوستان</b>\n\n";
-        $message .= "لینک دعوت اختصاصی شما:\n<code>{$link}</code>\n\n";
-        $message .= "🎁 به ازای هر دوست که ثبت‌نام کند، " . number_format(REFERRAL_BONUS) . " تومان پاداش می‌گیرید!";
-        $this->telegram->sendMessage($chat_id, $message);
+
+    public function searchJobs($query) {
+        return $this->jobService->searchJobs($query);
     }
-    
-    private function createTicket($chat_id) {
-        $_SESSION['user_state'][$chat_id] = 'waiting_ticket';
-        $this->telegram->sendMessage($chat_id, "📞 لطفاً مشکل خود را بنویسید:");
-    }
-    
-    private function showHelp($chat_id) {
-        $help = "📖 <b>راهنمای ربات</b>\n\n";
-        $help .= "1️⃣ <b>ارسال آگهی:</b>\n   هزینه: " . number_format(JOB_PRICE) . " تومان\n\n";
-        $help .= "2️⃣ <b>کیف پول:</b>\n   دستور /pay [مبلغ]\n\n";
-        $help .= "3️⃣ <b>کد تخفیف:</b>\n   از ادمین دریافت کنید\n\n";
-        $help .= "4️⃣ <b>دعوت از دوستان:</b>\n   هر دعوت " . number_format(REFERRAL_BONUS) . " تومان پاداش";
-        $this->telegram->sendMessage($chat_id, $help);
-    }
-    
-    private function cancelAction($chat_id) {
-        unset($_SESSION['user_state'][$chat_id]);
-        $this->telegram->sendMessage($chat_id, "❌ عملیات لغو شد.", $this->getMainKeyboard());
-    }
-    
-    private function handleUserState($chat_id, $text) {
-        $state = $_SESSION['user_state'][$chat_id] ?? null;
-        
-        if($state == 'waiting_job') {
-            $_SESSION['temp_job'][$chat_id] = $text;
-            $_SESSION['user_state'][$chat_id] = 'waiting_contact';
-            $this->telegram->sendMessage($chat_id, "🆔 لطفاً آیدی تلگرام خود را وارد کنید:\n(مثال: @username)");
-            
-        } elseif($state == 'waiting_contact') {
-            $job_text = $_SESSION['temp_job'][$chat_id];
-            $contact_id = $text;
-            $user = $this->userModel->findByTelegramId($chat_id);
-            
-            // بررسی موجودی
-            $balance = $this->userModel->getBalance($chat_id);
-            
-            if($balance >= JOB_PRICE) {
-                // کسر از کیف پول
-                $this->userModel->increaseBalance($chat_id, -JOB_PRICE);
-                
-                // ثبت آگهی (فعلاً ساده)
-                $this->telegram->sendMessage($chat_id, "✅ آگهی شما ثبت شد و برای تایید ارسال گردید.");
-                
-                // اطلاع به ادمین
-                foreach(ADMIN_IDS as $admin_id) {
-                    $this->telegram->sendMessage($admin_id, "📝 آگهی جدید از کاربر {$chat_id}:\n\n{$job_text}\n\nآیدی: {$contact_id}");
-                }
-            } else {
-                $this->telegram->sendMessage($chat_id, "❌ موجودی کیف پول شما کافی نیست!\n💰 موجودی: " . number_format($balance) . " تومان\nلطفاً کیف پول خود را شارژ کنید.");
-            }
-            
-            unset($_SESSION['user_state'][$chat_id]);
-            unset($_SESSION['temp_job'][$chat_id]);
-            
-        } elseif($state == 'waiting_discount') {
-            $this->telegram->sendMessage($chat_id, "🎁 کد تخفیف {$text} اعمال شد.");
-            unset($_SESSION['user_state'][$chat_id]);
-            
-        } elseif($state == 'waiting_ticket') {
-            foreach(ADMIN_IDS as $admin_id) {
-                $this->telegram->sendMessage($admin_id, "📞 تیکت جدید از کاربر {$chat_id}:\n\n{$text}");
-            }
-            $this->telegram->sendMessage($chat_id, "✅ تیکت شما ثبت شد. کد پیگیری: " . rand(1000, 9999));
-            unset($_SESSION['user_state'][$chat_id]);
-            $this->telegram->sendMessage($chat_id, "به منوی اصلی برگشتید.", $this->getMainKeyboard());
-        }
-    }
-    
-    private function handleCallback($callback) {
-        // برای دکمه‌های اینلاین
-        $chat_id = $callback['message']['chat']['id'];
-        $data = $callback['data'];
-        
-        $this->telegram->answerCallbackQuery($callback['id']);
-        
-        if(strpos($data, 'approve_') === 0) {
-            $this->telegram->sendMessage($chat_id, "✅ آگهی تایید شد.");
-        }
-    }
-    
 }

@@ -3,3 +3,10 @@ job-bot.zip
 .env
 config.php
 *.secret
+.idea/webServers.xml
+.idea/vcs.xml
+.gitignore
+.idea/php.xml
+.idea/modules.xml
+.idea/job-bot.iml
+.idea/deployment.xml

@@ -8,7 +8,7 @@ abstract class Model {
     protected $db;
 
     public function __construct() {
-        $config = require __DIR__ . '/../config/database.php';
+        $config = require __DIR__ . '/../../config/database.php';
         $this->db = new Database($config);
     }
 

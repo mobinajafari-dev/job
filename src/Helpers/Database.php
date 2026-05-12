@@ -27,7 +27,7 @@ class Database
         // 3. ایجاد اتصال در بلاک Try-Catch
         try {
             // شیء PDO را با DSN، نام کاربری، رمز عبور و Options ایجاد می‌کنیم
-            $this->pdo = new PDO($dsn, $config['user'], $config['pass'], $options);
+            $this->pdo = new PDO($dsn, $config['user'], $config['password'], $options);
         } catch (\PDOException $e) {
             // در صورت بروز خطا در اتصال، یک استثناء جدید پرتاب می‌کنیم (بهتر از die کردن است)
             throw new \PDOException("DB Connection Error: " . $e->getMessage(), (int)$e->getCode());

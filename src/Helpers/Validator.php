@@ -8,11 +8,22 @@ class Validator {
      * مثال: 09123456789
      */
     public static function phone($phone) {
-        // حذف فاصله و خط تیره
-        $phone = preg_replace('/[-\s]/', '', $phone);
+        // حذف تمام کاراکترهای غیر عددی (+, -, space, etc)
+        $phone = preg_replace('/[^0-9]/', '', $phone);
 
-        // بررسی فرمت: با 09 شروع شود و 11 رقم باشد
-        return preg_match('/^09[0-9]{9}$/', $phone);
+        // حذف صفر اول اگر وجود داشته باشد (برای استانداردسازی)
+        if (strlen($phone) == 11 && substr($phone, 0, 1) == '0') {
+            $phone = substr($phone, 1);
+        }
+
+        // اگر با 98 شروع شده بود، تبدیل کند
+        if (strlen($phone) == 12 && substr($phone, 0, 2) == '98') {
+            $phone = substr($phone, 2);
+        }
+
+        // حالا شماره باید 10 رقم باشد (مثل 9123456789)
+        // و با 9 شروع شود
+        return preg_match('/^9[0-9]{9}$/', $phone);
     }
 
     /**

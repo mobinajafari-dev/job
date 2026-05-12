@@ -6,40 +6,57 @@ use Services\TelegramService;
 class ChannelMembership {
     private $telegram;
     private $channelId;
+    private $channelUsername;
 
     public function __construct(TelegramService $telegram, $channelId) {
         $this->telegram = $telegram;
         $this->channelId = $channelId;
+        $this->channelUsername = ltrim($channelId, '@');
+    }
+
+    private function getJoinLink() {
+        return 'https://t.me/' . $this->channelUsername;
+    }
+
+    private function getChatMemberStatus($chat_id) {
+        if (empty($this->channelUsername)) {
+            return null;
+        }
+
+        $result = $this->telegram->getChatMember('@' . $this->channelUsername, $chat_id);
+
+        if (isset($result['ok']) && $result['ok']) {
+            return $result['result']['status'];
+        }
+        return null;
+    }
+
+    public function isMember($chat_id) {
+        $status = $this->getChatMemberStatus($chat_id);
+        return in_array($status, ['member', 'administrator', 'creator']);
     }
 
     public function check($chat_id) {
-        if (empty($this->channelId)) {
+        if (empty($this->channelUsername)) {
             return true;
         }
 
-        $result = $this->telegram->getChatMember($this->channelId, $chat_id);
-
-        if (isset($result['ok']) && $result['ok']) {
-            $status = $result['result']['status'];
-            $isMember = in_array($status, ['member', 'administrator', 'creator']);
-
-            if ($isMember) {
-                return true;
-            }
+        if ($this->isMember($chat_id)) {
+            return true;
         }
 
+        $joinLink = $this->getJoinLink();
+
         $keyboard = [
-            'inline_keyboard' => [
-                [
-                    ['text' => '✅ عضویت در کانال', 'url' => $this->channelId],
-                    ['text' => '🔄 بررسی مجدد', 'callback_data' => 'check_membership']
-                ]
-            ]
+            'inline_keyboard' => [[
+                ['text' => '✅ عضویت در کانال', 'url' => $joinLink],
+                ['text' => '🔄 بررسی مجدد', 'callback_data' => 'check_membership']
+            ]]
         ];
 
         $this->telegram->sendMessage($chat_id,
             "❌ <b>برای استفاده از ربات، ابتدا در کانال زیر عضو شوید:</b>\n\n"
-            . "🔗 {$this->channelId}\n\n"
+            . "🔗 {$joinLink}\n\n"
             . "✅ بعد از عضویت، روی دکمه «بررسی مجدد» کلیک کنید.",
             $keyboard
         );
@@ -47,31 +64,56 @@ class ChannelMembership {
         return false;
     }
 
-    public function checkMembershipWithMessage($chat_id, $customMessage = null) {
-        if (empty($this->channelId)) {
+    public function handleCallback($callback) {
+        $data = $callback['data'];
+        $chat_id = $callback['message']['chat']['id'];
+        $callback_id = $callback['id'];
+        $message_id = $callback['message']['message_id'];
+
+        if ($data == 'check_membership') {
+            if ($this->isMember($chat_id)) {
+                $this->telegram->deleteMessage($chat_id, $message_id);
+
+                $keyboard = [
+                    'keyboard' => [
+                        [['text' => '📝 ارسال آگهی'], ['text' => '💰 کیف پول من']],
+                        [['text' => '🎁 کد تخفیف'], ['text' => '👥 دعوت از دوستان']],
+                        [['text' => '📞 پشتیبانی'], ['text' => 'ℹ️ راهنما']]
+                    ],
+                    'resize_keyboard' => true
+                ];
+
+                $this->telegram->sendMessage($chat_id,
+                    "✅ <b>عضویت شما تأیید شد!</b>\n\nبه ربات خوش آمدید. از منوی اصلی استفاده کنید.",
+                    $keyboard
+                );
+                $this->telegram->answerCallbackQuery($callback_id, "✅ عضویت شما تأیید شد!");
+            } else {
+                $this->telegram->answerCallbackQuery($callback_id, "❌ شما هنوز عضو کانال نشده‌اید! لطفاً ابتدا عضو شوید.", true);
+            }
             return true;
         }
 
-        $result = $this->telegram->getChatMember($this->channelId, $chat_id);
+        return false;
+    }
 
-        if (isset($result['ok']) && $result['ok']) {
-            $status = $result['result']['status'];
-            $isMember = in_array($status, ['member', 'administrator', 'creator']);
-
-            if ($isMember) {
-                return true;
-            }
+    public function checkMembershipWithMessage($chat_id, $customMessage = null) {
+        if (empty($this->channelUsername)) {
+            return true;
         }
 
-        $message = $customMessage ?? "❌ برای ادامه، ابتدا در کانال ما عضو شوید:\n\n🔗 {$this->channelId}";
+        if ($this->isMember($chat_id)) {
+            return true;
+        }
+
+        $joinLink = $this->getJoinLink();
+        $message = $customMessage ?? "❌ برای ادامه، ابتدا در کانال ما عضو شوید:\n\n🔗 {$joinLink}";
 
         $keyboard = [
-            'inline_keyboard' => [
-                [
-                    ['text' => '📢 عضویت در کانال', 'url' => $this->channelId],
-                    ['text' => '🔄 تایید عضویت', 'callback_data' => 'check_membership']
-                ]
-            ]
+            'inline_keyboard' => [[
+                ['text' => '📢 عضویت در کانال', 'url' => $joinLink],
+                ['text' => '🔄 تایید عضویت', 'callback_data' => 'check_membership']
+            ]]
         ];
 
         $this->telegram->sendMessage($chat_id, $message, $keyboard);
@@ -80,11 +122,11 @@ class ChannelMembership {
     }
 
     public function getChannelInfo() {
-        if (empty($this->channelId)) {
+        if (empty($this->channelUsername)) {
             return null;
         }
 
-        $result = $this->telegram->getChat($this->channelId);
+        $result = $this->telegram->getChat('@' . $this->channelUsername);
 
         if (isset($result['ok']) && $result['ok']) {
             return [
@@ -100,64 +142,24 @@ class ChannelMembership {
     }
 
     public function getUserStatus($chat_id) {
-        if (empty($this->channelId)) {
+        if (empty($this->channelUsername)) {
             return 'no_channel';
         }
 
-        $result = $this->telegram->getChatMember($this->channelId, $chat_id);
-
-        if (isset($result['ok']) && $result['ok']) {
-            return $result['result']['status'];
-        }
-
-        return 'unknown';
+        return $this->getChatMemberStatus($chat_id) ?? 'unknown';
     }
 
     public function isAdminInChannel($chat_id) {
-        if (empty($this->channelId)) {
+        if (empty($this->channelUsername)) {
             return false;
         }
 
-        $result = $this->telegram->getChatMember($this->channelId, $chat_id);
-
-        if (isset($result['ok']) && $result['ok']) {
-            $status = $result['result']['status'];
-            return in_array($status, ['administrator', 'creator']);
-        }
-
-        return false;
+        $status = $this->getChatMemberStatus($chat_id);
+        return in_array($status, ['administrator', 'creator']);
     }
 
-    public function handleCallback($callback) {
-        $data = $callback['data'];
-        $chat_id = $callback['message']['chat']['id'];
-        $callback_id = $callback['id'];
-
-        if ($data == 'check_membership') {
-            $isMember = $this->check($chat_id);
-
-            if ($isMember) {
-                $this->telegram->sendMessage($chat_id, "✅ عضویت شما تأیید شد! حالا می‌توانید از ربات استفاده کنید.");
-                $this->telegram->answerCallbackQuery($callback_id, "✅ عضویت شما تأیید شد!");
-            } else {
-                $this->telegram->answerCallbackQuery($callback_id, "❌ شما هنوز عضو کانال نشده‌اید!", true);
-            }
-
-            return true;
-        }
-
-        return false;
+    public function getJoinLinkPublic() {
+        return $this->getJoinLink();
     }
 
-    public function getJoinLink() {
-        if (empty($this->channelId)) {
-            return null;
-        }
-
-        if (strpos($this->channelId, '@') === 0) {
-            return "https://t.me/" . ltrim($this->channelId, '@');
-        }
-
-        return $this->channelId;
-    }
 }

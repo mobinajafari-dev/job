@@ -110,10 +110,12 @@ class Router {
             return;
         }
 
-        // بررسی عضویت در کانال
+
+
+
+// بررسی عضویت در کانال
         if ($data == 'check_membership') {
-            $channelController = new \Controllers\ChannelController();
-            $channelController->handleCallback($callback);
+            $this->botController->handleCheckMembership($callback);
             return;
         }
 
@@ -189,7 +191,7 @@ class Router {
         }
 
         Logger::info("Start command from {$chat_id}, referral: " . ($referral_code ?? 'none'));
-        $this->botController->handleStart($chat_id, $username, $referral_code);
+        $this->botController->handleStartCommand($chat_id, $username, $referral_code);
     }
 
     /**
@@ -237,4 +239,13 @@ class Router {
 
         Logger::error("Router error: " . $e->getMessage() . " in " . $e->getFile() . ":" . $e->getLine());
     }
+
+    public function handleStartFromRouter($chat_id, $username, $referral_code) {
+        $message = [
+            'chat' => ['id' => $chat_id, 'username' => $username],
+            'text' => '/start' . ($referral_code ? " {$referral_code}" : '')
+        ];
+        $this->handleStartCommand($message);
+    }
+
 }

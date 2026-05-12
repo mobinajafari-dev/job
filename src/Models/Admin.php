@@ -5,12 +5,12 @@ use Core\Model;
 
 class Admin extends Model {
     protected $table = 'admins';
-    
+
     public function isAdmin($user_id) {
         $result = $this->select(['id'], ['user_id' => $user_id], false);
         return $result['status'] && $result['details'];
     }
-    
+
     public function addAdmin($user_id, $level = 1, $permissions = null, $created_by = null) {
         $data = [
             'user_id' => $user_id,
@@ -21,7 +21,7 @@ class Admin extends Model {
         ];
         return $this->insert($data);
     }
-    
+
     public function getAllAdmins() {
         $sql = "SELECT a.*, u.username, u.telegram_id, u.phone 
                 FROM admins a 
@@ -30,7 +30,7 @@ class Admin extends Model {
         $result = $this->rawQuery($sql);
         return $result['status'] ? $result['details'] : [];
     }
-    
+
     public function removeAdmin($user_id) {
         return $this->delete(['user_id' => $user_id]);
     }

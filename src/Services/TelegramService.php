@@ -210,4 +210,9 @@ class TelegramService {
 
         return json_decode($response, true);
     }
+
+    public function getChat($chat_id) {
+    $data = ['chat_id' => $chat_id];
+    return $this->call('getChat', $data);
+}
 }

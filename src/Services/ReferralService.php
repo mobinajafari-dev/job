@@ -36,35 +36,37 @@ class ReferralService {
             return;
         }
 
-        $link = $this->generateReferralLink($chat_id);
+        $link = "https://t.me/" . BOT_USERNAME . "?start=" . $referralCode;
         $referredCount = $this->userModel->getReferredCount($chat_id);
         $totalBonus = $referredCount * REFERRAL_BONUS;
 
-        $message = "👥 <b>سیستم دعوت از دوستان</b>\n\n";
-        $message .= "🎁 <b>پاداش هر دعوت:</b> " . number_format(REFERRAL_BONUS) . " تومان\n\n";
+        // ===== پیام اول: آمار =====
+        $statsMessage = "📊 <b>آمار دعوت‌های شما</b>\n\n";
+        $statsMessage .= "👥 تعداد دوستان دعوت شده: <b>{$referredCount}</b> نفر\n";
+        $statsMessage .= "💰 کل پاداش دریافتی: <b>" . number_format($totalBonus) . "</b> تومان\n\n";
+        $statsMessage .= "🎁 <b>پاداش هر دعوت:</b> " . number_format(REFERRAL_BONUS) . " تومان\n\n";
+        $statsMessage .= "💡 <b>نحوه دعوت:</b>\n";
+        $statsMessage .= "• لینک اختصاصی خود را برای دوستان بفرستید\n";
+        $statsMessage .= "• دوستان شما با لینک وارد ربات می‌شوند\n";
+        $statsMessage .= "• پس از ثبت‌نام، پاداش به حساب شما اضافه می‌شود\n\n";
+        $statsMessage .= "🔖 <b>کد معرف شما:</b> <code>{$referralCode}</code>";
 
-        $message .= "📊 <b>آمار شما:</b>\n";
-        $message .= "• تعداد دعوت‌های موفق: <b>{$referredCount}</b> نفر\n";
-        $message .= "• مجموع پاداش دریافتی: <b>" . number_format($totalBonus) . "</b> تومان\n\n";
-
-        $message .= "🔖 <b>کد معرف شما:</b>\n";
-        $message .= "<code>{$referralCode}</code>\n\n";
-
-        $message .= "🔗 <b>لینک دعوت اختصاصی:</b>\n";
-        $message .= "<code>{$link}</code>\n\n";
-
-        $message .= "💡 <b>چگونه کار می‌کند؟</b>\n";
-        $message .= "1. لینک بالا را برای دوستان خود ارسال کنید\n";
-        $message .= "2. دوستان شما با لینک وارد ربات می‌شوند\n";
-        $message .= "3. پس از ثبت‌نام، شما پاداش دریافت می‌کنید\n";
-        $message .= "4. هرچه دوستان بیشتری دعوت کنید، پاداش بیشتری می‌گیرید!\n\n";
-
-        $message .= "🚀 <b>برای دعوت از دوستان، لینک را کپی کنید:</b>";
+        // ===== پیام دوم: متن قابل اشتراک‌گذاری =====
+        $shareMessage = "🎁 <b>به ربات آگهی‌های کاری دعوتت می‌کنم!</b>\n\n";
+        $shareMessage .= "✨ با ثبت‌نام در این ربات، 10,000 تومان هدیه ثبت‌نام دریافت می‌کنی!\n\n";
+        $shareMessage .= "🔗 <b>لینک عضویت:</b>\n";
+        $shareMessage .= "<code>{$link}</code>\n\n";
+        $shareMessage .= "📝 <b>چی می‌تونی انجام بدی؟</b>\n";
+        $shareMessage .= "• ارسال آگهی استخدام\n";
+        $shareMessage .= "• پیدا کردن شغل مناسب\n";
+        $shareMessage .= "• دریافت پاداش معرف دوستان\n\n";
+        $shareMessage .= "🚀 همین الان عضو شو و از امکانات استفاده کن!";
 
         $keyboard = [
             'inline_keyboard' => [
                 [
-                    ['text' => '📋 کپی لینک دعوت', 'callback_data' => "copy_link_{$referralCode}"]
+                    ['text' => '📤 ارسال برای دوستان', 'callback_data' => "forward_message_{$referralCode}"],
+                    ['text' => '📋 کپی لینک', 'callback_data' => "copy_link_{$referralCode}"]
                 ],
                 [
                     ['text' => '🔙 بازگشت به منوی اصلی', 'callback_data' => 'back_to_menu']
@@ -72,7 +74,11 @@ class ReferralService {
             ]
         ];
 
-        $this->telegram->sendMessage($chat_id, $message, $keyboard);
+        // ارسال پیام اول (آمار)
+        $this->telegram->sendMessage($chat_id, $statsMessage);
+
+        // ارسال پیام دوم (قابل اشتراک)
+        $this->telegram->sendMessage($chat_id, $shareMessage, $keyboard);
     }
 
     public function processReferral($newUserId, $referralCode) {

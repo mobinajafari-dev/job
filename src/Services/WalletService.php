@@ -30,8 +30,6 @@ class WalletService {
 
         $message = "💰 <b>کیف پول شما</b>\n\n";
         $message .= "💵 موجودی: " . number_format($balance) . " تومان\n\n";
-        $message .= "📊 برای شارژ کیف پول از دستور /pay [مبلغ] استفاده کنید.\n";
-        $message .= "مثال: /pay 50000";
 
         if ($user) {
             $transactions = $this->walletModel->getTransactions($user['id'], 5);
@@ -39,7 +37,7 @@ class WalletService {
                 $message .= "\n📋 <b>آخرین تراکنش‌ها:</b>\n";
                 foreach ($transactions as $t) {
                     $sign = $t['amount'] > 0 ? '+' : '';
-                    $message .= "• " . date('d/m H:i', strtotime($t['created_at'])) . " - " . $sign . number_format($t['amount']) . " تومان\n";
+                    $message .= "• " . $t['description'] . " - " . $sign . number_format($t['amount']) . " تومان\n";
                 }
             }
         }

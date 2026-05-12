@@ -81,6 +81,9 @@ define('BOT_USERNAME', getenv('BOT_USERNAME') ?: '');
 define('CHANNEL_ID', getenv('CHANNEL_ID') ?: '');
 define('JOB_PRICE', (int)(getenv('JOB_PRICE') ?: 10000));
 define('REFERRAL_BONUS', (int)(getenv('REFERRAL_BONUS') ?: 2000));
+// تنظیمات درگاه پرداخت
+define('ZARINPAL_MERCHANT_ID', getenv('ZARINPAL_MERCHANT_ID') ?: '');
+define('CALLBACK_URL', getenv('CALLBACK_URL') ?: '');
 
 // ============================================
 // بررسی وجود توکن

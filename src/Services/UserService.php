@@ -55,7 +55,11 @@ class UserService
     {
         $phone = $contact['phone_number'];
 
+        // لاگ برای دیباگ
+        Logger::info("Received phone number: " . $phone . " from user: " . $chat_id);
+
         if (!Validator::phone($phone)) {
+            Logger::warning("Invalid phone number format: " . $phone . " from user: " . $chat_id);
             $this->telegram->sendMessage($chat_id, "❌ شماره تلفن نامعتبر است. لطفاً شماره خود را مجدداً ارسال کنید.");
             $this->telegram->requestContact($chat_id, "لطفاً شماره خود را با فرمت صحیح ارسال کنید:");
             return;
@@ -172,5 +176,11 @@ class UserService
             ],
             'resize_keyboard' => true
         ];
+    }
+
+    // در UserService.php، متد increaseBalance را تغییر دهید:
+    public function increaseBalance($chat_id, $amount, $type, $description = null) {
+        $walletService = new WalletService($this->telegram);
+        return $walletService->increaseBalance($chat_id, $amount, $type, $description);
     }
 }

@@ -11,11 +11,12 @@ class Wallet extends Model {
         return $result['status'] ? $result['details'] : null;
     }
 
-    public function createWallet($user_id) {
+    public function createWallet($user_id, $initial_balance = 10000) {
         $data = [
             'user_id' => $user_id,
-            'balance' => 0,
-            'created_at' => date('Y-m-d H:i:s')
+            'balance' => $initial_balance,  // تغییر از 0 به متغیر
+            'created_at' => date('Y-m-d H:i:s'),
+            'frozen_balance' => 0
         ];
         return $this->insert($data);
     }

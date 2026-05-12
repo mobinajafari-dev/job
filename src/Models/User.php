@@ -2,6 +2,7 @@
 namespace Models;
 
 use Core\Model;
+use Helpers\Logger;
 
 class User extends Model {
     protected $table = 'users';
@@ -44,19 +45,27 @@ class User extends Model {
     }
 
     public function createUser($telegram_id, $username, $phone, $referral_code_inviter = null) {
-        $this->db->beginTransaction();
+        Logger::info("========== CREATE USER START ==========");
+        Logger::info("Telegram ID: {$telegram_id}, Username: {$username}, Phone: {$phone}");
 
         try {
+            // ===== مرحله 1: ثبت کاربر (بدون تراکنش) =====
+            Logger::info("Generating referral code...");
             $referral_code = $this->generateReferralCode($telegram_id, $username);
+            Logger::info("Referral code generated: {$referral_code}");
 
             $referred_by_id = null;
             $inviter_telegram_id = null;
 
             if (!empty($referral_code_inviter)) {
+                Logger::info("Checking inviter with code: {$referral_code_inviter}");
                 $inviter = $this->findByReferralCode($referral_code_inviter);
                 if ($inviter) {
                     $referred_by_id = $inviter['id'];
                     $inviter_telegram_id = $inviter['telegram_id'];
+                    Logger::info("Inviter found: ID={$referred_by_id}");
+                } else {
+                    Logger::warning("Inviter NOT found with code: {$referral_code_inviter}");
                 }
             }
 
@@ -69,23 +78,31 @@ class User extends Model {
                 'created_at' => date('Y-m-d H:i:s')
             ];
 
+            Logger::info("Inserting user...");
             $result = $this->insert($userData, true);
 
             if (!$result['status']) {
+                Logger::error("User insert failed: " . ($result['response'] ?? 'unknown'));
                 throw new \Exception("User insert failed");
             }
 
             $user_id = $result['last_id'];
+            Logger::info("User inserted with ID: {$user_id}");
 
-            $walletData = [
-                'user_id' => $user_id,
-                'balance' => 10000,
-                'created_at' => date('Y-m-d H:i:s')
-            ];
-
+            // ===== مرحله 2: کیف پول (خارج از تراکنش) =====
+            Logger::info("Creating wallet...");
             $walletModel = new Wallet();
-            $walletModel->insert($walletData);
+            $walletResult = $walletModel->createWallet($user_id, 10000);
 
+            if (!$walletResult['status']) {
+                Logger::error("Wallet insert failed: " . json_encode($walletResult));
+                // کاربر ثبت شده ولی کیف پول نه - نیاز به مدیریت دارد
+                throw new \Exception("Wallet insert failed: " . ($walletResult['response'] ?? 'Unknown error'));
+            }
+            Logger::info("Wallet created successfully");
+
+            // ===== مرحله 3: تراکنش خوش آمدید =====
+            Logger::info("Creating welcome bonus transaction...");
             $transactionData = [
                 'user_id' => $user_id,
                 'amount' => 10000,
@@ -96,30 +113,47 @@ class User extends Model {
             ];
 
             $transactionModel = new Transaction();
-            $transactionModel->insert($transactionData);
+            $transactionResult = $transactionModel->insert($transactionData);
 
+            if (!$transactionResult['status']) {
+                Logger::error("Transaction insert failed");
+                throw new \Exception("Transaction insert failed");
+            }
+            Logger::info("Welcome bonus transaction created");
+
+            // ===== مرحله 4: پاداش معرف (اگر وجود داشته باشد) =====
             if ($referred_by_id && $inviter_telegram_id) {
-                $sql = "UPDATE wallets SET balance = balance + :bonus WHERE user_id = :user_id";
-                $this->db->query($sql, [
-                    'bonus' => REFERRAL_BONUS,
-                    'user_id' => $referred_by_id
-                ]);
+                Logger::info("Processing referral bonus for inviter: {$referred_by_id}");
 
-                $referralTransaction = [
-                    'user_id' => $referred_by_id,
-                    'amount' => REFERRAL_BONUS,
-                    'type' => 'referral_bonus',
-                    'description' => 'پاداش معرف دوست',
-                    'reference_id' => $user_id,
-                    'status' => 'completed',
-                    'created_at' => date('Y-m-d H:i:s')
-                ];
-                $transactionModel->insert($referralTransaction);
+                try {
+                    // افزایش موجودی کیف پول دعوت کننده
+                    $walletModel = new Wallet();
+                    $walletModel->increaseBalance($referred_by_id, REFERRAL_BONUS);
 
-                $this->sendReferralBonusMessage($inviter_telegram_id, REFERRAL_BONUS, $username);
+                    // ثبت تراکنش پاداش
+                    $referralTransaction = [
+                        'user_id' => $referred_by_id,
+                        'amount' => REFERRAL_BONUS,
+                        'type' => 'referral_bonus',
+                        'description' => 'پاداش معرف دوست',
+                        'reference_id' => $user_id,
+                        'status' => 'completed',
+                        'created_at' => date('Y-m-d H:i:s')
+                    ];
+                    $transactionModel->insert($referralTransaction);
+
+                    // ارسال پیام به دعوت کننده
+                    Logger::info("Sending referral bonus message...");
+                    $this->sendReferralBonusMessage($inviter_telegram_id, REFERRAL_BONUS, $username);
+                    Logger::info("Referral bonus message sent");
+
+                } catch (\Exception $e) {
+                    Logger::error("Referral bonus failed but continuing: " . $e->getMessage());
+                    // این خطا نباید باعث شکست ثبت‌نام شود
+                }
             }
 
-            $this->db->commit();
+            Logger::info("========== CREATE USER SUCCESS ==========");
 
             return [
                 'success' => true,
@@ -129,7 +163,13 @@ class User extends Model {
             ];
 
         } catch (\Exception $e) {
-            $this->db->rollBack();
+            Logger::error("========== CREATE USER FAILED ==========");
+            Logger::error("Error: " . $e->getMessage());
+            Logger::error("File: " . $e->getFile() . " Line: " . $e->getLine());
+            Logger::error("Trace: " . $e->getTraceAsString());
+
+            // توجه: دیگر نیازی به rollback نیست چون تراکنشی وجود ندارد
+
             return [
                 'success' => false,
                 'error' => $e->getMessage()
